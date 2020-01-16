@@ -13,20 +13,15 @@
  */
 package reactivefeign.cloud;
 
-import com.netflix.client.ClientException;
-import com.netflix.client.ClientFactory;
-import com.netflix.client.config.CommonClientConfigKey;
-import com.netflix.client.config.DefaultClientConfigImpl;
-import com.netflix.loadbalancer.BaseLoadBalancer;
-import com.netflix.loadbalancer.ILoadBalancer;
-import com.netflix.loadbalancer.Server;
 import feign.Target;
 import org.junit.BeforeClass;
+import org.springframework.cloud.client.ServiceInstance;
+import org.springframework.cloud.client.loadbalancer.reactive.ReactiveLoadBalancer;
 import reactivefeign.ReactiveFeignBuilder;
 import reactivefeign.testcase.IcecreamServiceApi;
 import reactivefeign.webclient.WebReactiveOptions;
 
-import java.util.Collections;
+import static reactivefeign.cloud.LoadBalancingReactiveHttpClientTest.loadBalancerFactory;
 
 /**
  * @author Sergii Karpenko
@@ -35,14 +30,12 @@ public class MetricsTest extends reactivefeign.MetricsTest {
 
   private static String serviceName = "MetricsTest-loadBalancingDefaultPolicyRoundRobin";
 
-  @BeforeClass
-  public static void setupServersList() throws ClientException {
-    DefaultClientConfigImpl clientConfig = new DefaultClientConfigImpl();
-    clientConfig.loadDefaultValues();
-    clientConfig.setProperty(CommonClientConfigKey.NFLoadBalancerClassName, BaseLoadBalancer.class.getName());
-    ILoadBalancer lb = ClientFactory.registerNamedLoadBalancerFromclientConfig(serviceName, clientConfig);
-    lb.addServers(Collections.singletonList(new Server("localhost", wireMockRule.port())));
-  }
+    private static ReactiveLoadBalancer.Factory<ServiceInstance> loadBalancerFactory;
+
+    @BeforeClass
+    public static void setupServersList() {
+        loadBalancerFactory = loadBalancerFactory(serviceName, wireMockRule.port());
+    }
 
   @Override
   protected String getHost() {
@@ -51,8 +44,8 @@ public class MetricsTest extends reactivefeign.MetricsTest {
 
   @Override
   protected ReactiveFeignBuilder<IcecreamServiceApi> builder() {
-    return BuilderUtils.<IcecreamServiceApi>cloudBuilderWithExecutionTimeoutDisabled("MetricsTest")
-            .enableLoadBalancer();
+    return BuilderUtils.<IcecreamServiceApi>cloudBuilderWithExecutionTimeoutDisabled()
+            .enableLoadBalancer(loadBalancerFactory);
   }
 
   @Override
@@ -62,8 +55,8 @@ public class MetricsTest extends reactivefeign.MetricsTest {
 
   @Override
   protected ReactiveFeignBuilder<IcecreamServiceApi> builder(long readTimeoutInMillis) {
-    return BuilderUtils.<IcecreamServiceApi>cloudBuilderWithExecutionTimeoutDisabled("MetricsTest")
-            .enableLoadBalancer()
+    return BuilderUtils.<IcecreamServiceApi>cloudBuilderWithExecutionTimeoutDisabled()
+            .enableLoadBalancer(loadBalancerFactory)
             .options(new WebReactiveOptions.Builder().setReadTimeoutMillis(readTimeoutInMillis).build()
     );
   }

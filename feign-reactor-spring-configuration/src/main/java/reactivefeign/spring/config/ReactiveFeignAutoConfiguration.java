@@ -34,8 +34,8 @@ public class ReactiveFeignAutoConfiguration {
     }
 
     @Bean
-    public ReactiveFeignContext reactiveFeignContext() {
-        ReactiveFeignContext context = new ReactiveFeignContext();
+    public ReactiveFeignNamedContextFactory reactiveFeignContext() {
+        ReactiveFeignNamedContextFactory context = new ReactiveFeignNamedContextFactory();
         context.setConfigurations(this.configurations);
         return context;
     }
@@ -47,8 +47,8 @@ public class ReactiveFeignAutoConfiguration {
         @Bean
         @ConditionalOnMissingBean
         @ConfigurationProperties("reactive.feign.client")
-        public ReactiveFeignClientProperties<WebReactiveOptions.Builder> webClientReactiveFeignClientProperties() {
-            return new ReactiveFeignClientProperties<>();
+        public ReactiveFeignClientsProperties<WebReactiveOptions.Builder> webClientReactiveFeignClientProperties() {
+            return new ReactiveFeignClientsProperties<>();
         }
 
     }
@@ -60,8 +60,8 @@ public class ReactiveFeignAutoConfiguration {
         @Bean
         @ConditionalOnMissingBean
         @ConfigurationProperties("reactive.feign.client")
-        public ReactiveFeignClientProperties<Java11ReactiveOptions.Builder> java11ReactiveFeignClientProperties() {
-            return new ReactiveFeignClientProperties<>();
+        public ReactiveFeignClientsProperties<Java11ReactiveOptions.Builder> java11ReactiveFeignClientProperties() {
+            return new ReactiveFeignClientsProperties<>();
         }
 
     }
@@ -73,8 +73,8 @@ public class ReactiveFeignAutoConfiguration {
         @Bean
         @ConditionalOnMissingBean
         @ConfigurationProperties("reactive.feign.client")
-        public ReactiveFeignClientProperties<JettyReactiveOptions.Builder> jettyReactiveFeignClientProperties() {
-            return new ReactiveFeignClientProperties<>();
+        public ReactiveFeignClientsProperties<JettyReactiveOptions.Builder> jettyReactiveFeignClientProperties() {
+            return new ReactiveFeignClientsProperties<>();
         }
 
     }

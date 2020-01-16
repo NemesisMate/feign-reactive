@@ -17,7 +17,6 @@
 package reactivefeign.spring.config;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
-import com.netflix.client.ClientException;
 import com.netflix.hystrix.Hystrix;
 import com.netflix.hystrix.HystrixCircuitBreaker;
 import com.netflix.hystrix.HystrixCommandGroupKey;
@@ -46,8 +45,8 @@ import org.springframework.web.bind.annotation.RequestMethod;
 import reactivefeign.ReactiveOptions;
 import reactivefeign.client.ReadTimeoutException;
 import reactivefeign.cloud.CloudReactiveFeign;
+import reactivefeign.publisher.retry.OutOfRetriesException;
 import reactivefeign.retry.BasicReactiveRetryPolicy;
-import reactivefeign.retry.ReactiveRetryPolicy;
 import reactivefeign.webclient.WebReactiveOptions;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -63,18 +62,33 @@ import static com.netflix.hystrix.HystrixCommandKey.Factory.asKey;
 import static java.util.Arrays.asList;
 import static org.assertj.core.api.Assertions.assertThat;
 import static reactivefeign.spring.config.AutoConfigurationTest.MOCK_SERVER_PORT_PROPERTY;
+import static reactivefeign.spring.config.SampleConfigurationsTest.*;
 
 @RunWith(SpringJUnit4ClassRunner.class)
 @SpringBootTest(classes = SampleConfigurationsTest.Application.class, webEnvironment = WebEnvironment.NONE,
-		properties = "ribbon.listOfServers=localhost:${"+MOCK_SERVER_PORT_PROPERTY+"}")
+		properties = {
+				"spring.cloud.discovery.client.simple.instances."+RFGN_PROPER+"[0].uri=http://localhost:${"+MOCK_SERVER_PORT_PROPERTY+"}",
+				"spring.cloud.discovery.client.simple.instances."+RFGN_CONFIGS+"[0].uri=http://localhost:${"+MOCK_SERVER_PORT_PROPERTY+"}",
+				"spring.cloud.discovery.client.simple.instances."+RFGN_FALLBACK+"[0].uri=http://localhost:${"+MOCK_SERVER_PORT_PROPERTY+"}",
+				"spring.cloud.discovery.client.simple.instances."+RFGN_ERRORDECODER+"[0].uri=http://localhost:${"+MOCK_SERVER_PORT_PROPERTY+"}"
+		})
 @DirtiesContext
-@TestPropertySource("classpath:error-decoder.properties")
+@TestPropertySource(locations = {
+		"classpath:error-decoder.properties",
+		"classpath:common.properties"
+})
 public class SampleConfigurationsTest {
+
+	public static final String RFGN_PROPER = "rfgn-proper";
+	public static final String RFGN_CONFIGS = "rfgn-configs";
+	public static final String RFGN_FALLBACK = "rfgn-fallback";
+	public static final String RFGN_ERRORDECODER = "rfgn-errordecoder";
 
 	static final int VOLUME_THRESHOLD = 2;
 	public static final String FALLBACK_VALUE = "Fallback";
 	public static final int UPDATE_INTERVAL = 5;
 	public static final int SLEEP_WINDOW = 1000;
+
 	private static WireMockServer mockHttpServer = new WireMockServer(wireMockConfig().dynamicPort());
 
 	//configured via properties file
@@ -105,8 +119,7 @@ public class SampleConfigurationsTest {
 			StepVerifier.create(propertiesSampleClient.sampleMethod())
 					.expectErrorMatches(throwable ->
 							throwable instanceof HystrixRuntimeException
-							&& throwable.getCause() instanceof ClientException
-							&& throwable.getCause().getMessage().contains("Number of retries on next server exceeded")
+							&& throwable.getCause() instanceof OutOfRetriesException
 					        && throwable.getCause().getCause() instanceof ReadTimeoutException)
 					.verify();
 		});
@@ -190,14 +203,14 @@ public class SampleConfigurationsTest {
 				.isTrue();
 	}
 
-	@ReactiveFeignClient(name = "rfgn-proper")
+	@ReactiveFeignClient(name = RFGN_PROPER)
 	protected interface PropertiesSampleClient {
 
 		@RequestMapping(method = RequestMethod.GET, value = "/sampleUrl")
 		Mono<String> sampleMethod();
 	}
 
-	@ReactiveFeignClient(name = "rfgn-configs",
+	@ReactiveFeignClient(name = RFGN_CONFIGS,
 			configuration = ReactiveFeignSampleConfiguration.class)
 	protected interface ConfigsSampleClient {
 
@@ -205,7 +218,7 @@ public class SampleConfigurationsTest {
 		Mono<String> sampleMethod();
 	}
 
-	@ReactiveFeignClient(name = "rfgn-fallback",
+	@ReactiveFeignClient(name = RFGN_FALLBACK,
 			fallback = ReactiveFeignFallbackConfiguration.Fallback.class,
 			configuration = ReactiveFeignFallbackConfiguration.class)
 	protected interface FallbackSampleClient {
@@ -213,7 +226,7 @@ public class SampleConfigurationsTest {
 		Mono<String> sampleMethod();
 	}
 
-	@ReactiveFeignClient(name = "rfgn-errordecoder")
+	@ReactiveFeignClient(name = RFGN_ERRORDECODER)
 	protected interface ErrorDecoderSampleClient {
 		@RequestMapping(method = RequestMethod.GET, value = "/sampleUrl")
 		Mono<String> sampleMethod();
@@ -280,8 +293,10 @@ public class SampleConfigurationsTest {
 		}
 
 		@Bean
-		public ReactiveRetryPolicy reactiveRetryPolicy(){
-			return BasicReactiveRetryPolicy.retryWithBackoff(1, 10);
+		public ReactiveRetryPolicies retryOnNext(){
+			return new ReactiveRetryPolicies.Builder()
+					.retryOnSame(BasicReactiveRetryPolicy.retryWithBackoff(1, 10))
+					.build();
 		}
 
 		@Bean

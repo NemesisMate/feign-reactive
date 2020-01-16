@@ -16,15 +16,7 @@
 
 package reactivefeign.cloud;
 
-import com.netflix.client.ClientException;
-import com.netflix.client.ClientFactory;
-import com.netflix.client.config.CommonClientConfigKey;
-import com.netflix.client.config.DefaultClientConfigImpl;
 import com.netflix.hystrix.exception.HystrixRuntimeException;
-import com.netflix.loadbalancer.BaseLoadBalancer;
-import com.netflix.loadbalancer.ILoadBalancer;
-import com.netflix.loadbalancer.Server;
-import feign.Target;
 import org.junit.BeforeClass;
 import org.junit.Ignore;
 import org.junit.Test;
@@ -32,11 +24,13 @@ import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration;
 import org.springframework.boot.autoconfigure.security.reactive.ReactiveUserDetailsServiceAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.cloud.client.ServiceInstance;
+import org.springframework.cloud.client.loadbalancer.reactive.ReactiveLoadBalancer;
 import reactivefeign.allfeatures.AllFeaturesApi;
 import reactivefeign.allfeatures.AllFeaturesController;
 import reactivefeign.allfeatures.AllFeaturesFeign;
 
-import static java.util.Arrays.asList;
+import static reactivefeign.cloud.LoadBalancingReactiveHttpClientTest.loadBalancerFactory;
 
 /**
  * @author Sergii Karpenko
@@ -52,19 +46,17 @@ public class AllFeaturesTest extends reactivefeign.allfeatures.AllFeaturesTest {
 
 	private static final String serviceName = "testServiceName";
 
+	private static ReactiveLoadBalancer.Factory<ServiceInstance> loadBalancerFactory;
+
 	@BeforeClass
-	public static void setupServersList() throws ClientException {
-		DefaultClientConfigImpl clientConfig = new DefaultClientConfigImpl();
-		clientConfig.loadDefaultValues();
-		clientConfig.setProperty(CommonClientConfigKey.NFLoadBalancerClassName, BaseLoadBalancer.class.getName());
-		ILoadBalancer lb = ClientFactory.registerNamedLoadBalancerFromclientConfig(serviceName, clientConfig);
-		lb.addServers(asList(new Server("localhost", 8080)));
+	public static void setupServersList() {
+		loadBalancerFactory = loadBalancerFactory(serviceName, 8080);
 	}
 
 	@Override
 	protected AllFeaturesApi buildClient() {
-		return BuilderUtils.<AllFeaturesFeign>cloudBuilderWithExecutionTimeoutDisabled("AllFeaturesTest")
-				.enableLoadBalancer()
+		return BuilderUtils.<AllFeaturesFeign>cloudBuilderWithExecutionTimeoutDisabled()
+				.enableLoadBalancer(loadBalancerFactory)
 				.decode404()
 				.target(AllFeaturesFeign.class, serviceName, "http://"+serviceName);
 	}

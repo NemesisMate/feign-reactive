@@ -17,7 +17,6 @@
 package reactivefeign.spring.config;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
-import com.netflix.client.ClientException;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -31,6 +30,7 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.junit4.SpringRunner;
 import org.springframework.web.bind.annotation.GetMapping;
+import reactivefeign.publisher.retry.OutOfRetriesException;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -49,9 +49,14 @@ import static reactivefeign.spring.config.RibbonEnabledHystrixDisabledUsingPrope
 
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = RibbonEnabledHystrixDisabledUsingPropertiesTest.TestConfiguration.class,
-		        webEnvironment = SpringBootTest.WebEnvironment.NONE,
-		        properties = FEIGN_CLIENT_TEST_RIBBON+".ribbon.listOfServers=localhost:${"+MOCK_SERVER_1_PORT_PROPERTY+"}, localhost:${"+MOCK_SERVER_2_PORT_PROPERTY+"}")
-@TestPropertySource("classpath:ribbon-enabled-hystrix-disabled.properties")
+		webEnvironment = SpringBootTest.WebEnvironment.NONE,
+		properties = {
+				"spring.cloud.discovery.client.simple.instances."+FEIGN_CLIENT_TEST_RIBBON+"[0].uri=http://localhost:${"+MOCK_SERVER_1_PORT_PROPERTY+"}",
+				"spring.cloud.discovery.client.simple.instances."+FEIGN_CLIENT_TEST_RIBBON+"[1].uri=http://localhost:${"+MOCK_SERVER_2_PORT_PROPERTY+"}",
+		})
+@TestPropertySource(locations = {
+		"classpath:ribbon-enabled-hystrix-disabled.properties",
+		"classpath:common.properties"})
 @DirtiesContext
 public class RibbonEnabledHystrixDisabledUsingPropertiesTest {
 
@@ -81,7 +86,7 @@ public class RibbonEnabledHystrixDisabledUsingPropertiesTest {
 		Mono<String> result = feignClient.testMethod();
 
 		StepVerifier.create(result)
-				.expectError(ClientException.class)
+				.expectError(OutOfRetriesException.class)
 				.verify();
 
 		assertThat(mockHttpServer1.getAllServeEvents().size()).isEqualTo(1);

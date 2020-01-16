@@ -34,6 +34,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.junit4.SpringRunner;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -44,6 +45,8 @@ import reactor.test.StepVerifier;
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static reactivefeign.spring.config.AutoConfigurationTest.MOCK_SERVER_PORT_PROPERTY;
+import static reactivefeign.spring.config.AutoConfigurationTest.TEST_FEIGN_CLIENT;
+import static reactivefeign.spring.config.AutoConfigurationTest.TEST_FEIGN_CLIENT_W_PARAM;
 
 /**
  * @author Sergii Karpenko
@@ -53,14 +56,19 @@ import static reactivefeign.spring.config.AutoConfigurationTest.MOCK_SERVER_PORT
 
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes = AutoConfigurationTest.TestConfiguration.class,
-		        webEnvironment = SpringBootTest.WebEnvironment.NONE,
-				properties = "ribbon.listOfServers=localhost:${"+MOCK_SERVER_PORT_PROPERTY+"}")
+		webEnvironment = SpringBootTest.WebEnvironment.NONE,
+		properties = {
+				"spring.cloud.discovery.client.simple.instances."+TEST_FEIGN_CLIENT+"[0].uri=http://localhost:${"+MOCK_SERVER_PORT_PROPERTY+"}",
+				"spring.cloud.discovery.client.simple.instances."+TEST_FEIGN_CLIENT_W_PARAM+"[0].uri=http://localhost:${"+MOCK_SERVER_PORT_PROPERTY+"}"
+		})
+@TestPropertySource("classpath:common.properties")
 @DirtiesContext
 public class AutoConfigurationTest {
 
 	static final String MOCK_SERVER_PORT_PROPERTY = "mock.server.port";
 
 	static final String TEST_FEIGN_CLIENT = "test-feign-client";
+	static final String TEST_FEIGN_CLIENT_W_PARAM = "test-feign-client-w-param";
 	private static final String TEST_URL = "/testUrl";
 	private static final String BODY_TEXT = "test";
 
@@ -137,9 +145,10 @@ public class AutoConfigurationTest {
 		Mono<String> testMethod();
 	}
 
-	@ReactiveFeignClient(name = "test-feign-client-w-param", path = "test/{id}",
+	@ReactiveFeignClient(name = TEST_FEIGN_CLIENT_W_PARAM, path = "test/{id}",
 			configuration = HystrixTimeoutDisabledConfiguration.class)
 	public interface TestReactiveFeignClientWithParamInPath {
+
 		@GetMapping(path = TEST_URL)
 		Mono<String> testMethod(@PathVariable("id") long id);
 	}

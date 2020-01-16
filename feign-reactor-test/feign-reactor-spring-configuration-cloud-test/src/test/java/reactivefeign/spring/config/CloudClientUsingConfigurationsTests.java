@@ -17,15 +17,10 @@
 package reactivefeign.spring.config;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
-import com.netflix.client.ClientException;
-import com.netflix.client.ClientFactory;
-import com.netflix.client.DefaultLoadBalancerRetryHandler;
-import com.netflix.client.RequestSpecificRetryHandler;
 import com.netflix.hystrix.HystrixCommandGroupKey;
 import com.netflix.hystrix.HystrixCommandKey;
 import com.netflix.hystrix.HystrixCommandProperties;
 import com.netflix.hystrix.HystrixObservableCommand;
-import com.netflix.loadbalancer.reactive.LoadBalancerCommand;
 import feign.FeignException;
 import feign.MethodMetadata;
 import feign.Target;
@@ -41,25 +36,35 @@ import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import reactivefeign.cloud.CloudReactiveFeign;
-import reactivefeign.cloud.LoadBalancerCommandFactory;
+import reactivefeign.publisher.retry.OutOfRetriesException;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.assertj.core.api.Assertions.assertThat;
+import static reactivefeign.retry.BasicReactiveRetryPolicy.retry;
 import static reactivefeign.spring.config.AutoConfigurationTest.MOCK_SERVER_PORT_PROPERTY;
+import static reactivefeign.spring.config.CloudClientUsingConfigurationsTests.BAR;
+import static reactivefeign.spring.config.CloudClientUsingConfigurationsTests.FOO;
 
 @RunWith(SpringJUnit4ClassRunner.class)
 @SpringBootTest(classes = CloudClientUsingConfigurationsTests.Application.class, webEnvironment = WebEnvironment.NONE,
-		properties = "ribbon.listOfServers=localhost:${"+MOCK_SERVER_PORT_PROPERTY+"}")
+		properties = {
+				"spring.cloud.discovery.client.simple.instances."+FOO+"[0].uri=http://localhost:${"+MOCK_SERVER_PORT_PROPERTY+"}",
+				"spring.cloud.discovery.client.simple.instances."+BAR+"[0].uri=http://localhost:${"+MOCK_SERVER_PORT_PROPERTY+"}"
+		})
+@TestPropertySource("classpath:common.properties")
 @DirtiesContext
 public class CloudClientUsingConfigurationsTests {
 
+	public static final String BAR = "bar";
+	public static final String FOO = "foo";
 	private static WireMockServer mockHttpServer = new WireMockServer(wireMockConfig().dynamicPort());
 
 	@Autowired
@@ -71,7 +76,7 @@ public class CloudClientUsingConfigurationsTests {
 
 	@BeforeClass
 	public static void setupStubs() {
-    	mockHttpServer.start();
+		mockHttpServer.start();
 
 		System.setProperty(MOCK_SERVER_PORT_PROPERTY, Integer.toString(mockHttpServer.port()));
 	}
@@ -94,8 +99,7 @@ public class CloudClientUsingConfigurationsTests {
 						.withStatus(503)));
 
 		StepVerifier.create(fooClient.foo())
-				.expectErrorMatches(throwable -> throwable.getCause() instanceof ClientException
-		                             && throwable.getCause().getMessage().contains("Number of retries exceeded"))
+				.expectErrorMatches(throwable -> throwable.getCause() instanceof OutOfRetriesException)
 				.verify();
 
 		assertThat(mockHttpServer.getAllServeEvents().size()).isEqualTo(2);
@@ -116,14 +120,14 @@ public class CloudClientUsingConfigurationsTests {
 		assertThat(mockHttpServer.getAllServeEvents().size()).isEqualTo(1);
 	}
 
-	@ReactiveFeignClient(name = "foo", configuration = FooConfiguration.class)
+	@ReactiveFeignClient(name = FOO, configuration = FooConfiguration.class)
 	protected interface FooClient {
 
 		@RequestMapping(method = RequestMethod.GET, value = "/foo")
 		Mono<String> foo();
 	}
 
-	@ReactiveFeignClient(name = "bar", configuration = BarConfiguration.class)
+	@ReactiveFeignClient(name = BAR, configuration = BarConfiguration.class)
 	protected interface BarClient {
 
 		@RequestMapping(method = RequestMethod.GET, value = "/bar")
@@ -143,14 +147,11 @@ public class CloudClientUsingConfigurationsTests {
 
 	@Configuration
 	protected static class FooConfiguration {
+
 		@Bean
-		public LoadBalancerCommandFactory balancerCommandFactory(){
-			return serviceName ->
-					LoadBalancerCommand.builder()
-							.withLoadBalancer(ClientFactory.getNamedLoadBalancer(serviceName))
-							.withRetryHandler(new RequestSpecificRetryHandler(true, true,
-									new DefaultLoadBalancerRetryHandler(1, 0, true), null))
-							.build();
+		public ReactiveRetryPolicies retryPolicies(){
+			return new ReactiveRetryPolicies.Builder()
+					.retryOnNext(retry(1)).build();
 		}
 
 		@Bean

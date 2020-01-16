@@ -1,25 +1,20 @@
 package reactivefeign.cloud;
 
 import com.github.tomakehurst.wiremock.junit.WireMockClassRule;
-import com.netflix.client.ClientException;
-import com.netflix.client.ClientFactory;
-import com.netflix.client.config.CommonClientConfigKey;
-import com.netflix.client.config.DefaultClientConfigImpl;
-import com.netflix.loadbalancer.BaseLoadBalancer;
-import com.netflix.loadbalancer.ILoadBalancer;
-import com.netflix.loadbalancer.Server;
 import feign.Param;
 import feign.RequestLine;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.ClassRule;
 import org.junit.Test;
+import org.springframework.cloud.client.ServiceInstance;
+import org.springframework.cloud.client.loadbalancer.reactive.ReactiveLoadBalancer;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
-import static java.util.Collections.singletonList;
+import static reactivefeign.cloud.LoadBalancingReactiveHttpClientTest.loadBalancerFactory;
 
 public class PathVariableInTargetUrlTest {
 
@@ -28,13 +23,11 @@ public class PathVariableInTargetUrlTest {
 
     private static String serviceName = "PathVariableInTargetUrlTest";
 
+    private static ReactiveLoadBalancer.Factory<ServiceInstance> loadBalancerFactory;
+
     @BeforeClass
-    public static void setupServersList() throws ClientException {
-        DefaultClientConfigImpl clientConfig = new DefaultClientConfigImpl();
-        clientConfig.loadDefaultValues();
-        clientConfig.setProperty(CommonClientConfigKey.NFLoadBalancerClassName, BaseLoadBalancer.class.getName());
-        ILoadBalancer lb = ClientFactory.registerNamedLoadBalancerFromclientConfig(serviceName, clientConfig);
-        lb.addServers(singletonList(new Server("localhost", server1.port())));
+    public static void setupServersList() {
+        loadBalancerFactory = loadBalancerFactory(serviceName, server1.port());
     }
 
     @Before
@@ -48,8 +41,8 @@ public class PathVariableInTargetUrlTest {
         String body = "Success";
         mockSuccessMono(server1, body);
 
-        TestMonoInterface client = BuilderUtils.<TestMonoInterface>cloudBuilder("shouldCorrectlyProcessPathVariableInUrl")
-                .enableLoadBalancer()
+        TestMonoInterface client = BuilderUtils.<TestMonoInterface>cloudBuilder()
+                .enableLoadBalancer(loadBalancerFactory)
                 .disableHystrix()
                 .target(TestMonoInterface.class, serviceName, "http://"+serviceName+"/mono/{id}");
 

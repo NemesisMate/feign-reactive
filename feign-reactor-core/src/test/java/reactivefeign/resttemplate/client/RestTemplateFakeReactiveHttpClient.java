@@ -89,12 +89,12 @@ public class RestTemplateFakeReactiveHttpClient implements ReactiveHttpClient {
         headers.add("Accept-Encoding", "gzip");
       }
 
-      return Mono.fromCallable(() -> {
+      return Mono.defer(() -> Mono.fromCallable(() -> {
         ResponseEntity response = restTemplate.exchange(
                 request.uri(), HttpMethod.valueOf(request.method()),
                 new HttpEntity<>(body, headers), responseType());
         return new FakeReactiveHttpResponse(request, response, returnPublisherType);
-      });
+      }));
     })
             .onErrorResume(HttpStatusCodeException.class,
                     ex -> Mono.just(new ErrorReactiveHttpResponse(request, ex)))

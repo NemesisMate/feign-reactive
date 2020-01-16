@@ -1,16 +1,16 @@
 package reactivefeign.cloud;
 
-import com.netflix.client.RetryHandler;
 import com.netflix.hystrix.HystrixCommandGroupKey;
 import com.netflix.hystrix.HystrixCommandKey;
 import com.netflix.hystrix.HystrixObservableCommand;
 import com.netflix.hystrix.exception.HystrixBadRequestException;
-import com.netflix.loadbalancer.reactive.LoadBalancerCommand;
 import feign.Contract;
 import feign.MethodMetadata;
 import feign.Target;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cloud.client.ServiceInstance;
+import org.springframework.cloud.client.loadbalancer.reactive.ReactiveLoadBalancer;
 import reactivefeign.FallbackFactory;
 import reactivefeign.ReactiveFeignBuilder;
 import reactivefeign.ReactiveOptions;
@@ -19,7 +19,7 @@ import reactivefeign.client.ReactiveHttpResponse;
 import reactivefeign.client.log.ReactiveLoggerListener;
 import reactivefeign.client.statushandler.ReactiveStatusHandler;
 import reactivefeign.cloud.methodhandler.HystrixMethodHandlerFactory;
-import reactivefeign.cloud.publisher.RibbonPublisherClient;
+import reactivefeign.cloud.publisher.LoadBalancerPublisherClient;
 import reactivefeign.methodhandler.MethodHandlerFactory;
 import reactivefeign.publisher.PublisherClientFactory;
 import reactivefeign.publisher.PublisherHttpClient;
@@ -28,11 +28,11 @@ import reactivefeign.retry.ReactiveRetryPolicy;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
+import static reactivefeign.ReactiveFeign.Builder.retry;
 import static reactivefeign.retry.FilteredReactiveRetryPolicy.notRetryOn;
-import static reactivefeign.utils.FeignUtils.returnPublisherType;
 
 /**
- * Allows to specify ribbon {@link LoadBalancerCommand}
+ * Allows to specify ribbon {@link ReactiveLoadBalancer.Factory<ServiceInstance>}
  * and HystrixObservableCommand.Setter with fallback factory.
  *
  * @author Sergii Karpenko
@@ -51,7 +51,8 @@ public class CloudReactiveFeign {
         private boolean hystrixEnabled = true;
         private SetterFactory commandSetterFactory = new DefaultSetterFactory();
         private FallbackFactory<T> fallbackFactory;
-        private LoadBalancerCommandFactory loadBalancerCommandFactory = s -> null;
+        private ReactiveLoadBalancer.Factory<ServiceInstance> loadBalancerFactory;
+        private ReactiveRetryPolicy retryOnNextServerPolicy;
 
         protected Builder(ReactiveFeignBuilder<T> builder) {
             this.builder = builder;
@@ -67,34 +68,14 @@ public class CloudReactiveFeign {
             return this;
         }
 
-        public Builder<T> enableLoadBalancer(){
-            return enableLoadBalancer(ReactiveFeignClientFactory.DEFAULT);
+        public Builder<T> enableLoadBalancer(
+                ReactiveLoadBalancer.Factory<ServiceInstance> loadBalancerFactory){
+            this.loadBalancerFactory = loadBalancerFactory;
+            return this;
         }
 
-        public Builder<T> enableLoadBalancer(ReactiveFeignClientFactory clientFactory){
-            return setLoadBalancerCommandFactory(serviceName ->
-                    LoadBalancerCommand.builder()
-                            .withLoadBalancer(clientFactory.loadBalancer(serviceName))
-                            .withClientConfig(clientFactory.clientConfig(serviceName))
-                            .build());
-        }
-
-        public Builder<T> enableLoadBalancer(ReactiveFeignClientFactory clientFactory, RetryHandler retryHandler){
-            if(retryHandler.getMaxRetriesOnSameServer() > 0){
-                logger.warn("Use retryWhen(ReactiveRetryPolicy retryPolicy) " +
-                        "as it allow to configure retry delays (backoff)");
-            }
-            return setLoadBalancerCommandFactory(serviceName ->
-                    LoadBalancerCommand.builder()
-                    .withLoadBalancer(clientFactory.loadBalancer(serviceName))
-                    .withClientConfig(clientFactory.clientConfig(serviceName))
-                    .withRetryHandler(retryHandler)
-                    .build());
-        }
-
-
-        public Builder<T> setLoadBalancerCommandFactory(LoadBalancerCommandFactory loadBalancerCommandFactory) {
-            this.loadBalancerCommandFactory = loadBalancerCommandFactory;
+        public Builder<T> retryOnNextServer(ReactiveRetryPolicy retryOnNextServerPolicy){
+            this.retryOnNextServerPolicy = notRetryOn(retryOnNextServerPolicy, HystrixBadRequestException.class);
             return this;
         }
 
@@ -110,49 +91,49 @@ public class CloudReactiveFeign {
         }
 
         @Override
-        public ReactiveFeignBuilder<T> contract(Contract contract) {
+        public Builder<T> contract(Contract contract) {
             builder = builder.contract(contract);
             return this;
         }
 
         @Override
-        public ReactiveFeignBuilder<T> options(ReactiveOptions options) {
+        public Builder<T> options(ReactiveOptions options) {
             builder = builder.options(options);
             return this;
         }
 
         @Override
-        public ReactiveFeignBuilder<T> addRequestInterceptor(ReactiveHttpRequestInterceptor requestInterceptor) {
+        public Builder<T> addRequestInterceptor(ReactiveHttpRequestInterceptor requestInterceptor) {
             builder = builder.addRequestInterceptor(requestInterceptor);
             return this;
         }
 
         @Override
-        public ReactiveFeignBuilder<T> addLoggerListener(ReactiveLoggerListener loggerListener) {
+        public Builder<T> addLoggerListener(ReactiveLoggerListener loggerListener) {
             builder = builder.addLoggerListener(loggerListener);
             return this;
         }
 
         @Override
-        public ReactiveFeignBuilder<T> decode404() {
+        public Builder<T> decode404() {
             builder = builder.decode404();
             return this;
         }
 
         @Override
-        public ReactiveFeignBuilder<T> statusHandler(ReactiveStatusHandler statusHandler) {
+        public Builder<T> statusHandler(ReactiveStatusHandler statusHandler) {
             builder = builder.statusHandler(statusHandler);
             return this;
         }
 
         @Override
-        public ReactiveFeignBuilder<T> responseMapper(BiFunction<MethodMetadata, ReactiveHttpResponse, ReactiveHttpResponse> responseMapper) {
+        public Builder<T> responseMapper(BiFunction<MethodMetadata, ReactiveHttpResponse, ReactiveHttpResponse> responseMapper) {
             builder =  builder.responseMapper(responseMapper);
             return this;
         }
 
         @Override
-        public ReactiveFeignBuilder<T> retryWhen(ReactiveRetryPolicy retryPolicy) {
+        public Builder<T> retryWhen(ReactiveRetryPolicy retryPolicy) {
             builder =  builder.retryWhen(notRetryOn(retryPolicy, HystrixBadRequestException.class));
             return this;
         }
@@ -189,10 +170,18 @@ public class CloudReactiveFeign {
                 @Override
                 public PublisherHttpClient create(MethodMetadata methodMetadata) {
                     PublisherHttpClient publisherClient = publisherClientFactory.create(methodMetadata);
-                    if(!target.name().equals(target.url())){
-                        return new RibbonPublisherClient(loadBalancerCommandFactory, target.name(),
-                                publisherClient, returnPublisherType(methodMetadata));
+                    if(!target.name().equals(target.url()) && loadBalancerFactory != null){
+                        publisherClient = new LoadBalancerPublisherClient(
+                                loadBalancerFactory.getInstance(target.name()), publisherClient);
+                        if(retryOnNextServerPolicy != null){
+                            publisherClient = retry(publisherClient, methodMetadata, retryOnNextServerPolicy.toRetryFunction());
+                        }
+                        return publisherClient;
                     } else {
+                        if(retryOnNextServerPolicy != null){
+                            logger.warn("retryOnNextServerPolicy will be ignored " +
+                                    "as loadBalancerFactory is not configured for {} reactive feign client", target.name());
+                        }
                         return publisherClient;
                     }
 

@@ -1,19 +1,16 @@
 package reactivefeign.cloud;
 
-import com.github.tomakehurst.wiremock.junit.WireMockRule;
+import com.github.tomakehurst.wiremock.junit.WireMockClassRule;
 import com.netflix.hystrix.HystrixCircuitBreaker;
-import com.netflix.hystrix.HystrixCommandGroupKey;
 import com.netflix.hystrix.HystrixCommandKey;
 import com.netflix.hystrix.HystrixCommandProperties;
-import com.netflix.hystrix.HystrixObservableCommand;
 import com.netflix.hystrix.exception.HystrixRuntimeException;
-import feign.MethodMetadata;
-import feign.Target;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.util.List;
@@ -27,7 +24,6 @@ import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMoc
 import static org.apache.http.HttpStatus.SC_SERVICE_UNAVAILABLE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
-import static org.hamcrest.Matchers.isA;
 import static reactivefeign.cloud.LoadBalancingReactiveHttpClientTest.MONO_URL;
 import static reactivefeign.cloud.LoadBalancingReactiveHttpClientTest.TestMonoInterface;
 
@@ -37,25 +33,22 @@ import static reactivefeign.cloud.LoadBalancingReactiveHttpClientTest.TestMonoIn
 public class HystrixReactiveHttpClientTest {
 
     public static final int SLEEP_WINDOW = 1000;
-    public static final int VOLUME_THRESHOLD = 1;
+    public static final int VOLUME_THRESHOLD = 4;
     public static final String FALLBACK = "fallback";
     public static final String SUCCESS = "success!";
     public static final int UPDATE_INTERVAL = 5;
+
     @Rule
-    public WireMockRule server = new WireMockRule(wireMockConfig().dynamicPort());
+    public WireMockClassRule server = new WireMockClassRule(wireMockConfig().dynamicPort());
 
     @Rule
     public ExpectedException expectedException = ExpectedException.none();
-
-    private static int testNo = 0;
 
     private AtomicReference<HystrixCommandKey> lastCommandKey = new AtomicReference<>();
 
     @Before
     public void resetServers() {
         server.resetAll();
-
-        testNo++;
     }
 
     @Test
@@ -71,8 +64,8 @@ public class HystrixReactiveHttpClientTest {
                         .withHeader("Content-Type", "application/json")
                         .withBody(body));
 
-        TestMonoInterface client = BuilderUtils.<TestMonoInterface>cloudBuilder()
-                .setHystrixCommandSetterFactory(getSetterFactory(testNo))
+        TestMonoInterface client = BuilderUtils.<TestMonoInterface>cloudBuilderWithUniqueHystrixCommand(
+                hystrixPropertiesTimeoutDisabled(), lastCommandKey)
                 .target(TestMonoInterface.class, "http://localhost:" + server.port());
 
         client.getMono().block();
@@ -88,8 +81,8 @@ public class HystrixReactiveHttpClientTest {
                         .withHeader("Content-Type", "application/json")
                         .withBody(body));
 
-        TestMonoInterface client = BuilderUtils.<TestMonoInterface>cloudBuilder()
-                .setHystrixCommandSetterFactory(getSetterFactory(testNo))
+        TestMonoInterface client = BuilderUtils.<TestMonoInterface>cloudBuilderWithUniqueHystrixCommand(
+                hystrixPropertiesTimeoutDisabled(), lastCommandKey)
                 .fallback(() -> Mono.just(FALLBACK))
                 .target(TestMonoInterface.class, "http://localhost:" + server.port());
 
@@ -107,8 +100,8 @@ public class HystrixReactiveHttpClientTest {
                         .withHeader("Content-Type", "application/json")
                         .withBody(body));
 
-        TestMonoInterface client = BuilderUtils.<TestMonoInterface>cloudBuilder()
-                .setHystrixCommandSetterFactory(getSetterFactory(testNo))
+        TestMonoInterface client = BuilderUtils.<TestMonoInterface>cloudBuilderWithUniqueHystrixCommand(
+                hystrixPropertiesTimeoutDisabled(), lastCommandKey)
                 .fallbackFactory(throwable -> () -> {throw new RuntimeException();})
                 .target(TestMonoInterface.class, "http://localhost:" + server.port());
 
@@ -121,6 +114,8 @@ public class HystrixReactiveHttpClientTest {
     @Test
     public void shouldOpenCircuitBreakerAndCloseAfterSleepTime() throws InterruptedException {
 
+        assertThat(server.getAllServeEvents()).isEmpty();
+
         int callsNo = VOLUME_THRESHOLD + 1;
 
         server.stubFor(get(urlEqualTo(MONO_URL))
@@ -128,15 +123,15 @@ public class HystrixReactiveHttpClientTest {
                         .withStatus(SC_SERVICE_UNAVAILABLE)
                         .withHeader("Retry-After", "1")));
 
-        TestMonoInterface client = BuilderUtils.<TestMonoInterface>cloudBuilder()
-                .setHystrixCommandSetterFactory(getSetterFactory(testNo))
+        TestMonoInterface client = BuilderUtils.<TestMonoInterface>cloudBuilderWithUniqueHystrixCommand(
+                hystrixPropertiesTimeoutDisabled(), lastCommandKey)
                 .target(TestMonoInterface.class, "http://localhost:" + server.port());
 
         //check that circuit breaker get opened on volume threshold
         List<Object> results = IntStream.range(0, callsNo).mapToObj(i -> {
             try {
                 try {
-                    return client.getMono().block();
+                    return client.getMono().subscribeOn(Schedulers.parallel()).block();
                 } finally {
                     Thread.sleep(UPDATE_INTERVAL * 10);
                 }
@@ -145,20 +140,19 @@ public class HystrixReactiveHttpClientTest {
             }
         }).collect(Collectors.toList());
 
-        assertThat(server.getAllServeEvents().size()).isLessThan(callsNo);
         Throwable firstError = (Throwable) results.get(0);
         assertThat(firstError).isInstanceOf(HystrixRuntimeException.class);
         assertThat(firstError.getMessage())
                 .contains("and no fallback available")
                 .doesNotContain("short-circuited");
-        assertThat(HystrixCircuitBreaker.Factory.getInstance(lastCommandKey.get())
-                .isOpen())
-                .isTrue();
-
         Throwable lastError = (Throwable) results.get(results.size() - 1);
         assertThat(lastError).isInstanceOf(HystrixRuntimeException.class);
         assertThat(lastError.getMessage())
                 .contains("short-circuited and no fallback available.");
+        assertThat(HystrixCircuitBreaker.Factory.getInstance(lastCommandKey.get())
+                .isOpen())
+                .isTrue();
+        assertThat(server.getAllServeEvents().size()).isLessThan(callsNo);
 
         //wait to circuit breaker get closed again
         Thread.sleep(SLEEP_WINDOW);
@@ -186,44 +180,38 @@ public class HystrixReactiveHttpClientTest {
     @Test
     public void shouldFailOnTimeoutExceptionOnDefaultSettings() {
 
-        expectedException.expect(HystrixRuntimeException.class);
-        expectedException.expectCause(isA(TimeoutException.class));
-
         server.stubFor(get(urlEqualTo(MONO_URL))
-                .inScenario("testScenario")
                 .willReturn(aResponse()
                         .withStatus(200)
                         .withFixedDelay(2000)
                         .withHeader("Content-Type", "application/json")
                         .withBody("success!")));
 
-        TestMonoInterface client = BuilderUtils.<TestMonoInterface>cloudBuilder()
+        TestMonoInterface client = BuilderUtils.<TestMonoInterface>cloudBuilderWithUniqueHystrixCommand(
+                hystrixProperties()
+                        .withExecutionTimeoutEnabled(true)
+                        .withExecutionTimeoutInMilliseconds(500), lastCommandKey)
                 .target(TestMonoInterface.class, "http://localhost:" + server.port());
 
-        client.getMono().block();
+        StepVerifier.create(client.getMono().subscribeOn(Schedulers.parallel()))
+                .expectErrorMatches(throwable -> throwable instanceof HystrixRuntimeException
+                        && throwable.getCause() instanceof TimeoutException)
+                .verify();
     }
 
-    CloudReactiveFeign.SetterFactory getSetterFactory(int testNo) {
-        return new CloudReactiveFeign.SetterFactory() {
-            @Override
-            public HystrixObservableCommand.Setter create(Target<?> target, MethodMetadata methodMetadata) {
-                String groupKey = target.name();
-                HystrixCommandKey commandKey = HystrixCommandKey.Factory.asKey(methodMetadata.configKey() + testNo);
-                lastCommandKey.set(commandKey);
-                return HystrixObservableCommand.Setter
-                        .withGroupKey(HystrixCommandGroupKey.Factory.asKey(groupKey))
-                        .andCommandKey(commandKey)
-                        .andCommandPropertiesDefaults(HystrixCommandProperties.Setter()
-                                .withCircuitBreakerRequestVolumeThreshold(VOLUME_THRESHOLD)
-                                .withCircuitBreakerErrorThresholdPercentage(1)
-                                .withExecutionTimeoutEnabled(false)
-                                .withCircuitBreakerSleepWindowInMilliseconds(SLEEP_WINDOW)
-                                .withMetricsRollingStatisticalWindowInMilliseconds(1000)
-                                .withMetricsRollingStatisticalWindowBuckets(1)
-                                .withMetricsHealthSnapshotIntervalInMilliseconds(UPDATE_INTERVAL)
-                        );
-            }
-        };
+    private static HystrixCommandProperties.Setter hystrixProperties(){
+        return HystrixCommandProperties.Setter()
+                .withCircuitBreakerRequestVolumeThreshold(VOLUME_THRESHOLD)
+                .withCircuitBreakerErrorThresholdPercentage(1)
+                .withCircuitBreakerSleepWindowInMilliseconds(SLEEP_WINDOW)
+                .withMetricsRollingStatisticalWindowInMilliseconds(1000)
+                .withMetricsRollingStatisticalWindowBuckets(1)
+                .withMetricsHealthSnapshotIntervalInMilliseconds(UPDATE_INTERVAL);
+    }
+
+    static HystrixCommandProperties.Setter hystrixPropertiesTimeoutDisabled(){
+        return hystrixProperties()
+                .withExecutionTimeoutEnabled(false);
     }
 
 }

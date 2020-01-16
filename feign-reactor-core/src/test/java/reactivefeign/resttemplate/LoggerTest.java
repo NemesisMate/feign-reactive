@@ -13,6 +13,7 @@
  */
 package reactivefeign.resttemplate;
 
+import org.junit.Ignore;
 import reactivefeign.ReactiveFeign;
 import reactivefeign.ReactiveFeignBuilder;
 import reactivefeign.resttemplate.client.RestTemplateFakeReactiveFeign;
@@ -22,7 +23,13 @@ import reactivefeign.testcase.IcecreamServiceApi;
 /**
  * @author Sergii Karpenko
  */
+@Ignore
 public class LoggerTest extends reactivefeign.LoggerTest {
+
+  @Override
+  protected String appenderPrefix(){
+    return "resttemplate_";
+  }
 
   @Override
   protected ReactiveFeign.Builder<IcecreamServiceApi> builder() {

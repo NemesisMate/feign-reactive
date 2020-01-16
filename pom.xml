@@ -62,6 +62,7 @@
         <wiremock.version>2.25.1</wiremock.version>
         <awaitility.version>3.1.6</awaitility.version>
         <guava.version>23.0</guava.version>
+        <log4j-slf4j-impl.version>2.12.1</log4j-slf4j-impl.version>
 
         <!-- Plugins -->
         <jacoco-plugin.version>0.8.5</jacoco-plugin.version>
@@ -199,6 +200,13 @@
                 <groupId>com.google.guava</groupId>
                 <artifactId>guava</artifactId>
                 <version>${guava.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.logging.log4j</groupId>
+                <artifactId>log4j-slf4j-impl</artifactId>
+                <version>${log4j-slf4j-impl.version}</version>
+                <scope>test</scope>
             </dependency>
 
         </dependencies>
